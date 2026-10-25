@@ -269,7 +269,7 @@ These numbers are assumptions I can tune, and in a real airline they'd come from
 | Scenario | Do nothing | Delay or cancel only | **SkyRecover** |
 |---|---|---|---|
 | Plane stuck 3 hours | 540 min | 540 min | **309 min delay**, score 469 (proven best) |
-| Plane stuck 5 hours | 1,020 min | 56 min but **2 flights cancelled** (score 656) | **364 min, 0 cancelled** (score 564) |
+| Plane stuck 5 hours | 1,020 min | 56 min but **2 flights cancelled** (score 656) | **364 min, 0 cancelled** (score 564, proven best) |
 | Every ATL departure +60 min | 1,094 min | 1,094 min | 1,094 min (no help) |
 
 **The stories in those numbers:**
@@ -280,7 +280,20 @@ These numbers are assumptions I can tune, and in a real airline they'd come from
 ### The "gap" (and a lesson about solvers)
 The solver reports two numbers: the best plan it **found**, and the best score it can **prove** is possible. The gap is how far apart they are.
 
-For the 3-hour case, the plan found in **5 seconds** (score 469) was later **proven optimal** after 32 seconds. The gap shrank 68% → 48% → 0%, but **the plan never changed**. So a big gap doesn't always mean a bad plan. Sometimes the solver just hasn't finished proving it.
+For the 3-hour case, the plan found in **5 seconds** (score 469) was later **proven optimal** after 32 seconds. The gap shrank 68% to 48% to 0%, but **the plan never changed**. So a big gap doesn't always mean a bad plan. Sometimes the solver just hasn't finished proving it.
+
+The 5-hour case still showed a 38% gap on my 2-core test machine, but on my laptop (12 threads, so the solver can search in parallel) it reached **0%, proven optimal**, in the same time limit. More cores = faster proofs.
+
+### More than one best plan
+My laptop's 5-hour plan used different swaps than the test machine's (N956DZ instead of N944DZ in one spot), but with **the exact same score, 564**. Several plans can be equally good, and the solver returns whichever it proves first. Both are correct.
+
+### Reading a plan: the swap chain (5-hour case)
+1. The stuck plane N963DZ can't fly its 14:00 Nashville round trip, so **N373DA** takes it, **on time**
+2. N373DA's own 14:00 Knoxville trip moves to **N337DN** (21 min late)
+3. N337DN's Philadelphia trip moves to **N956DZ**, and so on down the line
+4. N963DZ comes back at 19:00 and flies its own evening Charleston trip, 43 min late
+
+One broken plane causes a **chain of reassignments**, spreading a small delay across several planes instead of one big delay (or a cancellation) on one.
 
 ### Design decisions
 - **Swap pool of 12 aircraft:** the disrupted plane plus the 11 planes passing through the hub with the most spare time. Including every Delta plane would make the problem too big to solve in seconds. Real airline recovery tools also limit the pool
@@ -312,3 +325,56 @@ Through the score weights. A cancellation counts as 300 minutes of delay, a swap
 
 **Q: When does it NOT help?**
 A hub-wide ground stop. Every plane is delayed, so there's nothing to swap in. I found that in my own testing.
+
+---
+
+## Piece 7: The Web Dashboard
+
+### What it does
+`app.py` is a website built with **Streamlit**, a Python library that turns Python code into a web page with buttons, sliders and charts. No HTML or JavaScript needed. Four tabs:
+
+| Tab | What you can do |
+|---|---|
+| **Overview** | Headline results: ripple model 0.85, forecaster AUC 0.82, 43% of late flights caught |
+| **Day explorer** | Pick a date and airport. See how delays build up hour by hour, and which flights the model flagged an hour ahead (March only, the test month) |
+| **Ripple** | Pick a flight, drag "how late does it land," and watch which of that plane's later flights get pushed late |
+| **Recovery** | Break a plane (or slow down a hub), press Run, and compare Do nothing vs. SkyRecover on a timeline of every aircraft |
+
+### How the website gets its data
+The website runs on Streamlit's free servers, not my laptop, so it can't download from BTS or retrain the model. `skyrecover export-demo` bundles what it needs into `data/demo/` (about 7 MB, small enough for GitHub):
+- `flights.parquet`: the cleaned 3 months of Delta flights
+- `predictions.parquet`: the trained model's predictions for March (the month it never trained on)
+- `metrics.json`: all the scores
+
+Before trusting the bundle, I checked that the saved model, loaded back from disk, gives the **exact same AUC (0.8224)**. A mismatch would mean the saved file was broken.
+
+### Things I caught by actually looking at the website
+Automated tests only check that nothing crashes. They can't tell you a chart is unreadable. So I opened every tab in a real browser and looked:
+1. **The time picker crashed in the browser** ("incorrect locale information"). Replaced it with a simple dropdown of times
+2. **The ripple chart squashed 4 flights into 2 rows,** unreadable. Gave each flight a fixed row height
+3. **Some flight bars were paper-thin.** The same time-zone trap, a third time! A 1-hour flight from Atlanta (Eastern) to a Central-time city "lands" at the same clock time it left, so the bar had zero width. Fixed by drawing each bar as **departure + real flight duration** instead of using the local landing time
+4. **A chart title was hidden behind the numbers above it,** and the hour labels were sideways. Small layout fixes
+
+**Lesson:** "the tests pass" and "it works for a human" aren't the same thing. Always look at what you built.
+
+### Design choices
+- **Caching** (`@st.cache_data`): Streamlit reruns the whole script every time you click something. Caching means the data loads once, and an optimizer run with the same settings is instant the second time
+- **Colors:** a tested, colorblind-safe palette. Blue = on time/scheduled, orange = delayed, green = moved to another plane. Every color also has a legend, so meaning never relies on color alone
+- **The app adds `src/` to Python's path itself,** so it works on Streamlit's servers without a `pip install` step
+
+### Commands
+```
+pip install -e ".[dev,app]"     # adds streamlit + altair
+skyrecover export-demo          # bundle data for the website
+streamlit run app.py            # opens the website at http://localhost:8501
+```
+
+### Questions I should be ready for
+**Q: Can I see it?**
+Yes, here's the live link. (Show the Recovery tab: break a plane at Atlanta, press Run, and point at how the work moves to other planes.)
+
+**Q: How does the website get its data without downloading from the government site?**
+I export a 7 MB bundle: cleaned flights, the model's predictions for the test month, and the metrics. The site runs from that, and I verified the saved model reproduces the same AUC.
+
+**Q: What did you learn building the front end?**
+That passing tests isn't the same as working. I found four problems only by opening it in a browser, including the same time-zone bug from my data cleaning showing up again in the charts.

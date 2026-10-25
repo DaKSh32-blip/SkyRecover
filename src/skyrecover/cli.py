@@ -128,6 +128,46 @@ def cmd_recover(args):
         print(changed.drop(columns=["_wrong_end", "flight_id"], errors="ignore").to_string(index=False))
 
 
+def cmd_export_demo(args):
+    """Bundle what the website needs into data/demo/ (small enough for GitHub)."""
+    import json
+    import shutil
+
+    import lightgbm as lgb
+
+    from skyrecover.features import LIVE_FEATURES, SCHEDULE_FEATURES, build_features
+    from skyrecover.ripple import add_rotations, validate_against_bts
+
+    flights = load_flights()
+    metrics_file = config.REPORTS_DIR / "forecast_metrics.json"
+    model_delay = config.MODELS_DIR / "day_of_delay.txt"
+    model_late = config.MODELS_DIR / "day_of_late.txt"
+    if not (metrics_file.exists() and model_delay.exists()):
+        sys.exit("Run `skyrecover train` first.")
+
+    out = Path("data/demo")
+    out.mkdir(parents=True, exist_ok=True)
+    shutil.copy(config.FLIGHTS_FILE, out / "flights.parquet")
+
+    # Day-of model predictions for the TEST month only (flights it never trained on)
+    feats = build_features(flights)
+    test = feats[feats["sched_dep"] >= pd.Timestamp(args.test_from)]
+    cols = SCHEDULE_FEATURES + LIVE_FEATURES
+    pred = pd.DataFrame({
+        "flight_id": test["flight_id"].to_numpy(),
+        "prob_late": lgb.Booster(model_file=str(model_late)).predict(test[cols]),
+        "pred_delay": lgb.Booster(model_file=str(model_delay)).predict(test[cols]).clip(0),
+    })
+    pred.to_parquet(out / "predictions.parquet", index=False)
+
+    metrics = json.loads(metrics_file.read_text())
+    metrics["ripple_validation"] = validate_against_bts(add_rotations(flights))
+    (out / "metrics.json").write_text(json.dumps(metrics, indent=2))
+
+    size = sum(f.stat().st_size for f in out.iterdir()) / 1e6
+    print(f"Wrote {out}/ ({size:.1f} MB): flights, {len(pred):,} predictions, metrics")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="skyrecover", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
@@ -162,6 +202,10 @@ def main(argv=None):
     rc.add_argument("--time-limit", type=float, default=60, help="seconds per solve (stops early once proven best)")
     rc.add_argument("--show-plan", action="store_true", help="print every changed flight")
     rc.set_defaults(func=cmd_recover)
+
+    ex = sub.add_parser("export-demo", help="bundle data + predictions for the website")
+    ex.add_argument("--test-from", default="2024-03-01")
+    ex.set_defaults(func=cmd_export_demo)
 
     args = p.parse_args(argv)
     args.func(args)

@@ -1,0 +1,65 @@
+{
+  "data": {
+    "train_flights": 109289,
+    "valid_flights": 35453,
+    "test_flights": 82427,
+    "train_range": "2024-01-01 to 2024-02-15",
+    "test_range": "2024-03-01 to 2024-03-31",
+    "late_rate_test": 0.161
+  },
+  "models": {
+    "always_on_time": {
+      "mae_minutes": 10.94,
+      "auc": 0.5,
+      "precision": 0.0,
+      "recall": 0.0
+    },
+    "airport_hour_average": {
+      "mae_minutes": 10.95,
+      "auc": 0.5977,
+      "precision": 0.222,
+      "recall": 0.001
+    },
+    "ripple_formula": {
+      "mae_minutes": 9.77,
+      "auc": 0.6137,
+      "precision": 0.97,
+      "recall": 0.156
+    },
+    "planning": {
+      "mae_minutes": 10.51,
+      "auc": 0.6608,
+      "precision": 0.715,
+      "recall": 0.09,
+      "top_features": {
+        "slack_minutes": 0.236,
+        "origin": 0.198,
+        "dest": 0.156,
+        "dep_hour": 0.121,
+        "leg_of_day": 0.117,
+        "day_of_week": 0.068
+      }
+    },
+    "day_of": {
+      "mae_minutes": 8.12,
+      "auc": 0.8224,
+      "precision": 0.79,
+      "recall": 0.427,
+      "top_features": {
+        "inbound_arr_delay_known": 0.36,
+        "inbound_pushed_known": 0.099,
+        "inbound_dep_delay_known": 0.099,
+        "origin_recent_delay": 0.083,
+        "leg_of_day": 0.074,
+        "origin": 0.073
+      }
+    }
+  },
+  "ripple_validation": {
+    "flights_compared": 29400,
+    "correlation": 0.851,
+    "our_total_minutes": 450362,
+    "bts_total_minutes": 564396,
+    "agree_on_ripple_or_not": 0.853
+  }
+}
