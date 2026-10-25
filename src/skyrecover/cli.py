@@ -65,6 +65,23 @@ def cmd_ripple(args):
               "flights_hit", "minutes_pushed"]].to_string(index=False))
 
 
+def cmd_train(args):
+    from skyrecover.features import build_features
+    from skyrecover.forecast import save, train_and_evaluate
+    print("Building features (only info known 60 min before departure)...")
+    feats = build_features(load_flights())
+    print(f"Training on data before {args.test_from}, testing on {args.test_from} onward...")
+    results, trained = train_and_evaluate(feats, test_from=args.test_from)
+    save(results, trained)
+
+    d = results["data"]
+    print(f"\nTested on {d['test_flights']:,} flights it never saw ({d['test_range']})\n")
+    print(f"{'model':<24}{'avg error (min)':>16}{'AUC':>8}{'precision':>11}{'recall':>8}")
+    for name, m in results["models"].items():
+        print(f"{name:<24}{m['mae_minutes']:>16}{m['auc']:>8}{m['precision']:>11}{m['recall']:>8}")
+    print(f"\nSaved models to {config.MODELS_DIR}/ and the report to {config.REPORTS_DIR}/forecast_report.md")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="skyrecover", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
@@ -83,6 +100,10 @@ def main(argv=None):
     r.add_argument("--flight-id", type=int, help="simulate a delay on one flight")
     r.add_argument("--delay", type=float, default=60, help="minutes late (with --flight-id)")
     r.set_defaults(func=cmd_ripple)
+
+    t = sub.add_parser("train", help="train and test the delay forecaster")
+    t.add_argument("--test-from", default="2024-03-01", help="first date of the test period")
+    t.set_defaults(func=cmd_train)
 
     args = p.parse_args(argv)
     args.func(args)

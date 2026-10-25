@@ -41,7 +41,7 @@ COLUMNS = {
 # The final table every other module relies on
 CLEAN_COLUMNS = [
     "flight_id", "date", "airline", "tail_number", "flight_no", "origin", "dest",
-    "sched_dep", "sched_arr", "dep_delay", "arr_delay", "cancelled", "distance",
+    "sched_dep", "sched_arr", "block_minutes", "dep_delay", "arr_delay", "cancelled", "distance",
     "cause_carrier", "cause_weather", "cause_nas", "cause_security", "cause_late_aircraft",
 ]
 
@@ -97,6 +97,9 @@ def clean(raw: pd.DataFrame, airline: str | None = "DL") -> pd.DataFrame:
     arr_same_day = date + pd.to_timedelta(arr_min, unit="m")           # arrival-zone clock, guessing same day
     day_shift = ((naive_arr - arr_same_day) / pd.Timedelta(days=1)).round()
     df["sched_arr"] = arr_same_day + pd.to_timedelta(day_shift, unit="D")
+    # Scheduled gate-to-gate time. Keeping it lets other modules convert a
+    # departure into the ARRIVAL airport's clock: sched_arr - block_minutes.
+    df["block_minutes"] = elapsed
 
     df["cancelled"] = df["cancelled"].fillna(0).astype(bool)
     for c in ["cause_carrier", "cause_weather", "cause_nas", "cause_security", "cause_late_aircraft"]:

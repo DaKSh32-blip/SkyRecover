@@ -121,7 +121,16 @@ Delta, January 2024, 11,441 delayed flights compared:
 | Agree on whether a ripple happened at all | **86%** |
 | Total minutes, mine vs. Delta's | 206,024 vs. 249,009 |
 
-My model captures most of it but **undercounts by about 17%**. Likely reasons: the real minimum turn time varies by aircraft and airport (35 minutes is an average), and late planes sometimes lose extra time waiting for a gate or crew. Those are things to improve later.
+**Across all 3 months (January to March 2024), 29,400 delayed flights:**
+| Check | Result |
+|---|---|
+| Correlation | **0.851** |
+| Agree on whether a ripple happened | **85.3%** |
+| Total minutes, mine vs. Delta's | 450,362 vs. 564,396 |
+
+The results barely change from one month to three, which shows the model is stable, not a lucky fit to one month.
+
+My model captures most of it but **undercounts by about 17 to 20%**. Likely reasons: the real minimum turn time varies by aircraft and airport (35 minutes is an average), and late planes sometimes lose extra time waiting for a gate or crew. Those are things to improve later.
 
 ### A known limitation (good to bring up yourself)
 The worst "spreader" in January was an 18-hour delay that my model says rippled into 5 more flights. In real life, Delta probably **swapped in a different plane** long before that. My model assumes the plane keeps flying its original schedule. Deciding when to swap planes is exactly what the Recovery Optimizer (a later piece) is for.
@@ -138,10 +147,85 @@ Tests use tiny hand-made examples where I know the right answer, like a plane wi
 
 ### Questions I should be ready for
 **Q: How do you know your ripple model is right?**
-I compared it against the delay causes Delta itself reports to the government. My estimate has a 0.85 correlation with Delta's reported "Late Aircraft" minutes, and we agree on whether a ripple happened 86% of the time.
+I compared it against the delay causes Delta itself reports to the government. Across 29,400 delayed flights from January to March 2024, my estimate has a 0.85 correlation with Delta's reported "Late Aircraft" minutes, and we agree on whether a ripple happened 85% of the time.
 
 **Q: What are its limitations?**
-It undercounts by about 17%, because it uses one average minimum turn time. And it assumes a late plane keeps flying its schedule, when in reality airlines swap aircraft. Both are on my roadmap.
+It undercounts by about 20%, because it uses one average minimum turn time. And it assumes a late plane keeps flying its schedule, when in reality airlines swap aircraft. Both are on my roadmap.
 
 **Q: Why is this useful?**
 It shows where one delay will cause the most damage downstream. If you know a plane's next four flights have almost no slack, that's the plane to swap out first.
+
+---
+
+## Piece 4: The Delay Forecaster (machine learning)
+
+### What it does
+Predicts, **60 minutes before departure**, whether a flight will leave 15+ minutes late and by how many minutes. Two versions:
+- **Planning model:** schedule only (could run the night before)
+- **Day-of model:** schedule plus live info (is the inbound plane late? is this airport having a bad few hours?)
+
+Files: `features.py` builds the inputs, `forecast.py` trains and tests, and `skyrecover train` runs it all.
+
+### The #1 rule: no data leakage
+**Data leakage** = accidentally giving the model information it wouldn't have in real life. It makes a model look amazing in testing and useless in the real world.
+
+So every feature has to be something an airline would actually **know 60 minutes before departure**:
+- The inbound plane's landing delay is only used **if it has already landed** by then
+- "Airport's recent delays" only counts flights that **already left**
+- I wrote tests that prove this (`tests/test_features.py`), like a plane that lands after prediction time, where the test checks the model can't see that landing delay
+
+### The features
+| Type | Feature | Why it matters |
+|---|---|---|
+| Schedule | `slack_minutes` | Tight turns can't absorb delays (from piece 3) |
+| Schedule | `leg_of_day` | A plane's 4th flight has had 3 chances to pick up delay |
+| Schedule | `dep_hour`, `day_of_week` | Evenings are worse, delays build up through the day |
+| Schedule | `origin`, `dest` | Some airports are more congested |
+| Schedule | `origin_hour_departures` | How busy the schedule is that hour |
+| Live | `inbound_arr_delay_known` | How late our plane landed (if it has) |
+| Live | `inbound_pushed_known` | The ripple formula from piece 3, using what's known so far |
+| Live | `origin_recent_delay` | Average delay at this airport over the last 3 hours. It's how the model "sees" storms without weather data |
+
+### Honest testing
+- **Time split:** train on Jan 1 to Feb 15, use Feb 15 to 29 to decide when to stop training, test on **all of March**, which the model never saw. Shuffling randomly would let the model see the same storm day in both training and testing, and inflate the score.
+- **Fair baselines:** a model only means something compared to simple methods, so I compare against three: always guess "on time," the typical delay for that airport and hour, and the ripple formula alone with no ML.
+
+### The results (82,427 March flights it never saw)
+| Model | Avg error | AUC | Precision | Recall |
+|---|---|---|---|---|
+| Always guess on time | 10.94 min | 0.50 | none | 0% |
+| Airport + hour typical delay | 10.95 min | 0.60 | 22% | 0% |
+| Ripple formula only (no ML) | 9.77 min | 0.61 | 97% | 16% |
+| Planning model (schedule only) | 10.51 min | 0.66 | 72% | 9% |
+| **Day-of model** | **8.12 min** | **0.82** | **79%** | **43%** |
+
+**What the metrics mean (kid version):**
+- **Avg error:** on average, how many minutes off the guess is. Lower is better.
+- **AUC:** line up one late flight and one on-time flight. AUC is how often the model correctly says which one is riskier. 0.5 is a coin flip, 1.0 is perfect. **0.82 is strong.**
+- **Precision:** of flights it warns about, how many were really late. 79%, so its warnings are usually right.
+- **Recall:** of flights that really were late, how many it caught. 43%. The rest were things it couldn't see coming, like a sudden mechanical problem.
+
+### The story the numbers tell
+- The **ripple formula alone** is super precise (97%) but only catches 16% of late flights. When the physics says "this plane will push 15+ minutes," it's almost always right. It just misses everything that isn't a ripple.
+- The **day-of model** catches **2.7x more late flights** (43%) while staying right 79% of the time, and cuts average error by **26%** compared to guessing on time.
+- The **planning model** is weak (AUC 0.66). Without live info, you mostly can't predict delays the night before, because the big causes (weather, earlier ripples) haven't happened yet. That's an honest finding, and adding **weather forecasts** is the obvious next step.
+- The top signal is how late the inbound plane landed (36% of the model's decisions). **Ripples dominate delays**, which confirms piece 3.
+
+### Decisions I made and why
+- **Removed `month`:** trained on January and February, tested on March, so the model had never seen month 3. It could only guess from other months. A feature like that looks useful but means nothing.
+- **Median, not mean, for the airport baseline:** when you're scored on average minutes off, the median is the best single guess. Using a weak baseline would make my model look better than it is.
+- **LightGBM:** a gradient-boosted tree model. It's the standard for table-shaped data like this, fast, handles missing values natively (useful, since live features are often "not known yet"), and shows which features mattered.
+- **Capped delays at 300 minutes for training:** a few 18-hour delays would otherwise dominate everything the model learns.
+
+### Questions I should be ready for
+**Q: How accurate is your model?**
+On a full month of real Delta flights it never saw, it ranks late flights correctly 82% of the time (AUC 0.82), catches 43% of late departures with 79% precision, and cuts average error by 26% compared to guessing on time.
+
+**Q: How do you know it isn't cheating?**
+Every feature only uses information available 60 minutes before departure, and I have tests proving it can't see a landing that hasn't happened yet. And I test on a later month, not a random shuffle.
+
+**Q: What would you improve?**
+Add weather forecasts to make the planning model useful, train on more months, and use real minimum turn times per aircraft type instead of a 35-minute average.
+
+**Q: Why not just use the ripple formula?**
+It's very precise but only catches 16% of late flights. The ML model combines it with airport conditions and schedule patterns and catches 2.7x more.
