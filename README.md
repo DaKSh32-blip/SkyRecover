@@ -3,10 +3,11 @@
 [![tests](https://github.com/DaKSh32-blip/SkyRecover/actions/workflows/tests.yml/badge.svg)](https://github.com/DaKSh32-blip/SkyRecover/actions/workflows/tests.yml)
 ![python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-informational)
 ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+[![live demo](https://img.shields.io/badge/live%20demo-skyrecover.streamlit.app-success)](https://skyrecover.streamlit.app/)
 
 **Predicts airline delays before they happen, and shows how one late plane ripples through the rest of the network.** Built on 227,855 real Delta flights from US government data.
 
-> **Live demo:** _link coming soon_ (Streamlit dashboard: explore a day, watch a delay ripple, break a plane and watch it get re-planned)
+> **🔗 Live demo: [skyrecover.streamlit.app](https://skyrecover.streamlit.app/)** (explore a day, watch a delay ripple, break a plane and watch it get re-planned)
 >
 > Status: forecasting, ripple modeling, the recovery optimizer and the web dashboard are working on real data. The AI ops copilot is in progress (see [Roadmap](#roadmap)).
 

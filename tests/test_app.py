@@ -18,4 +18,4 @@ from streamlit.testing.v1 import AppTest  # noqa: E402
 def test_dashboard_renders_without_errors():
     at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=120).run()
     assert not at.exception
-    assert len(at.tabs) == 4
+    assert len(at.tabs) == 5

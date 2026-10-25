@@ -378,3 +378,53 @@ I export a 7 MB bundle: cleaned flights, the model's predictions for the test mo
 
 **Q: What did you learn building the front end?**
 That passing tests isn't the same as working. I found four problems only by opening it in a browser, including the same time-zone bug from my data cleaning showing up again in the charts.
+
+---
+
+## Piece 7b: Redesigning the website
+
+### The idea: an airline ops desk
+The first version used Streamlit's default look, which looks like every other Streamlit app. The redesign takes its style from things that really live in an airline operations center:
+
+| Element | Choice | Where it comes from |
+|---|---|---|
+| Background | Pale blue-gray `#EDF1F2` | The paper of aviation charts |
+| Text | Navy ink `#14212E` | Chart ink |
+| Accent | Magenta `#B0246E` | The magenta lines on real aeronautical charts. Used for buttons and delays |
+| Headings and data | **B612** font | Designed by Airbus for **cockpit displays**, to be readable at a glance |
+| Body text | Barlow | Clean and readable, clearly different from B612 |
+| Flight cards | Buff paper `#EFE3C2` | Air traffic controllers' departure strips are printed on buff paper |
+
+### The hero
+Instead of a title and logo, the page opens with **one real plane's real day**: aircraft N349NW on January 23, 2024.
+
+```
+09:15 ATL->GRR  +88   first delay
+12:08 GRR->ATL  +68   late aircraft
+15:15 ATL->ROC  +55   late aircraft
+18:12 ROC->ATL  +27   late aircraft
+21:40 ATL->ALB  +16   late aircraft
+```
+
+One 88-minute delay in the morning, and the plane was still 16 minutes late at 9:40pm, five flights later. Delta itself reported every delay after the first as "late aircraft." I found this plane by searching all 227,855 flights for a day that starts at Atlanta, where the first delay is 40 to 110 minutes and Delta reports late-aircraft delays on the next three flights.
+
+When the page loads, the delay bars fill in one strip after another, so you watch the delay travel through the day. That's the **only** animation on the site, on purpose: one moment that tells the story beats effects everywhere. It's turned off for people whose device is set to reduce motion.
+
+### The three findings
+Written as sentences, not dashboard tiles, so each number explains itself:
+- **0.85**: ripple estimate vs. Delta's reported late-aircraft delay
+- **43%**: late departures flagged an hour ahead
+- **0 cancelled**: for a 5-hour breakdown, vs. 2 cancellations without swaps
+
+(The first draft had "43%" and "-43%" side by side with different meanings, which was confusing, so the third one became "0 cancelled.")
+
+### The Network map
+A new tab: every Delta route out of an airport, drawn as arcs on a US map. Darker blue = more average delay, thicker = more flights. Airport locations come from the open-source `airportsdata` package, saved in `data/demo/airports.csv`.
+
+### Bugs caught while redesigning
+- **`%-I` date format crashes on Windows** (it's Linux-only). I wrote my own `clock12()` function instead
+- **Chart fonts:** Streamlit's default chart theme overrode mine, so each chart gets the style applied directly, with backup fonts in case a font doesn't load
+
+### Questions I should be ready for
+**Q: Why does your site look like that?**
+I designed it around an airline operations desk: aviation chart colors, the font Airbus made for cockpit displays, and flight cards styled like air traffic control strips. The front page shows one real Delta plane's delay rippling through its whole day, which is the problem the project solves.

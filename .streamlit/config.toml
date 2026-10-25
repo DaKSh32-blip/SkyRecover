@@ -1,0 +1,10 @@
+# "Ops desk" theme: aeronautical-chart paper, navy ink, airspace magenta.
+[theme]
+base = "light"
+primaryColor = "#B0246E"              # airspace magenta (buttons, sliders, active tab)
+backgroundColor = "#EDF1F2"           # chart paper
+secondaryBackgroundColor = "#E1E7EA"  # inputs, tables
+textColor = "#14212E"                 # chart ink
+
+[client]
+toolbarMode = "minimal"
