@@ -82,6 +82,52 @@ def cmd_train(args):
     print(f"\nSaved models to {config.MODELS_DIR}/ and the report to {config.REPORTS_DIR}/forecast_report.md")
 
 
+def cmd_recover(args):
+    from skyrecover.optimize import build_scenario, compare, optimality_gap
+    if not args.aog_tail and not args.ground_delay:
+        args.aog_tail = "auto"
+    problem, info = build_scenario(
+        load_flights(), args.date, args.hub, args.start, hours=args.hours,
+        pool=args.pool, aog_tail=args.aog_tail, ground_delay=args.ground_delay)
+
+    what = []
+    if info["aog_tail"]:
+        what.append(f"aircraft {info['aog_tail']} stuck at {args.hub} for {args.hours:g}h")
+    if info["ground_delay"]:
+        what.append(f"every {args.hub} departure delayed {info['ground_delay']} min for {args.hours:g}h")
+    print(f"Scenario: {args.date} {info['start']}, " + " + ".join(what))
+    print(f"Recovery pool: {info['aircraft']} aircraft, {info['flights']} flights\n")
+
+    plans = compare(problem, time_limit=args.time_limit)
+    labels = {"do_nothing": "Do nothing (wait)", "delay_or_cancel_only": "Delay/cancel, no swaps",
+              "skyrecover": "SkyRecover (swaps allowed)"}
+    print(f"{'strategy':<28}{'delay min':>10}{'cancelled':>11}{'reassigned':>12}{'score':>8}{'gap':>7}")
+    for k, p in plans.items():
+        if not p.rows:
+            print(f"{labels[k]:<28} no solution ({p.status})")
+            continue
+        s = p.summary()
+        gap = optimality_gap(p)
+        gap_txt = "" if gap is None else f"{gap:.0%}"
+        print(f"{labels[k]:<28}{s['delay_minutes']:>10}{s['cancelled']:>11}"
+              f"{s['flights_reassigned']:>12}{s['score']:>8}{gap_txt:>7}")
+
+    base = plans["do_nothing"].summary()["score"]
+    best = plans["skyrecover"].summary()["score"] if plans["skyrecover"].rows else base
+    if base:
+        print(f"\nSkyRecover cuts the disruption score by {(base - best) / base:.0%} vs doing nothing.")
+    print("score = delay minutes + 300 per cancellation + 20 per reassigned flight + 120 per plane ending in the wrong city")
+    print("gap = how far the plan could be from the mathematically best one (0% = proven best)")
+
+    if args.show_plan and plans["skyrecover"].rows:
+        t = plans["skyrecover"].table
+        changed = t[(t["delay"] > 0) | t["cancelled"] | (t["new_tail"] != t["tail"])].copy()
+        for c in ["sched_dep", "new_dep"]:
+            changed[c] = changed[c].map(lambda m: "" if pd.isna(m) else f"{int(m)//60 % 24:02d}:{int(m) % 60:02d}")
+        print("\nChanged flights in the SkyRecover plan:")
+        print(changed.drop(columns=["_wrong_end", "flight_id"], errors="ignore").to_string(index=False))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="skyrecover", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
@@ -104,6 +150,18 @@ def main(argv=None):
     t = sub.add_parser("train", help="train and test the delay forecaster")
     t.add_argument("--test-from", default="2024-03-01", help="first date of the test period")
     t.set_defaults(func=cmd_train)
+
+    rc = sub.add_parser("recover", help="simulate a disruption and compare recovery strategies")
+    rc.add_argument("--date", default="2024-03-15")
+    rc.add_argument("--hub", default="ATL")
+    rc.add_argument("--start", default="14:00", help="when the disruption starts (HH:MM)")
+    rc.add_argument("--hours", type=float, default=3, help="how long it lasts")
+    rc.add_argument("--aog-tail", help="aircraft stuck on the ground ('auto' = pick one)")
+    rc.add_argument("--ground-delay", type=int, default=0, help="minutes added to every hub departure")
+    rc.add_argument("--pool", type=int, default=12, help="how many aircraft the optimizer may use")
+    rc.add_argument("--time-limit", type=float, default=60, help="seconds per solve (stops early once proven best)")
+    rc.add_argument("--show-plan", action="store_true", help="print every changed flight")
+    rc.set_defaults(func=cmd_recover)
 
     args = p.parse_args(argv)
     args.func(args)

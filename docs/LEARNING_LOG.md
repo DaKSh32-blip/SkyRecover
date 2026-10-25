@@ -229,3 +229,86 @@ Add weather forecasts to make the planning model useful, train on more months, a
 
 **Q: Why not just use the ripple formula?**
 It's very precise but only catches 16% of late flights. The ML model combines it with airport conditions and schedule patterns and catches 2.7x more.
+
+---
+
+## Piece 6: The Recovery Optimizer
+
+### What it does
+When something breaks, it re-plans the operation: **which plane flies which flight, when each flight leaves, and which flights (if any) to cancel**, so the total damage is as small as possible.
+
+Two kinds of disruption:
+- **AOG ("aircraft on ground"):** a plane is stuck at the hub, e.g. with a mechanical problem, for a few hours
+- **Ground delay:** every departure from the hub is delayed (like an FAA ground stop during a storm)
+
+### Three strategies, compared on the same problem
+| Strategy | What it does |
+|---|---|
+| Do nothing | Every plane keeps its flights and just waits. Delays ripple (piece 3's logic) |
+| Delay or cancel only | Optimizer can delay or cancel flights, but every flight keeps its original plane |
+| **SkyRecover** | Optimizer can also **swap planes** between flights |
+
+### How it works (kid version)
+Instead of writing step-by-step instructions, you describe the puzzle and let a solver find the best answer:
+- **Decisions:** which plane flies each flight, how many minutes late it leaves, cancel or not
+- **Rules:** a plane can only leave from the airport where it is (no teleporting), it needs 35 minutes between flights, it can't fly two flights at once, delays max out at 180 minutes (beyond that you cancel)
+- **Goal:** minimize the **score** = delay minutes + 300 per cancellation + 20 per reassigned flight + 120 per plane that ends the day in the wrong city
+
+The solver is **Google OR-Tools CP-SAT**, a constraint programming solver. It searches through millions of combinations and can **prove** when it has found the best one.
+
+Each plane's day is modeled as a **route** through flights, like a delivery truck visiting stops. That's the classic "vehicle routing" trick (`AddCircuit` in the code).
+
+### Why each penalty exists (business tradeoffs)
+- **Cancellation = 300 minutes:** cancelling strands a whole planeload of passengers, much worse than a delay
+- **Reassigned flight = 20 minutes:** my first version used 18 swaps to save delay. No ops center would do that, because every swap means moving crews, gates and bags. Adding a swap cost made the plans realistic
+- **Wrong end city = 120 minutes:** if a plane ends the night in the wrong city, tomorrow's first flight breaks
+
+These numbers are assumptions I can tune, and in a real airline they'd come from the business.
+
+### Results on a real day (Atlanta, March 15, 2024, 2pm, 12 aircraft, 39 flights)
+| Scenario | Do nothing | Delay or cancel only | **SkyRecover** |
+|---|---|---|---|
+| Plane stuck 3 hours | 540 min | 540 min | **309 min delay**, score 469 (proven best) |
+| Plane stuck 5 hours | 1,020 min | 56 min but **2 flights cancelled** (score 656) | **364 min, 0 cancelled** (score 564) |
+| Every ATL departure +60 min | 1,094 min | 1,094 min | 1,094 min (no help) |
+
+**The stories in those numbers:**
+- **3-hour AOG:** swapping planes cuts total delay by **43%**, and the plan is **mathematically proven** to be the best possible under these rules
+- **5-hour AOG:** without swaps, the best option is cancelling a round trip. SkyRecover **flies everyone**, by swapping planes, and still scores better
+- **Ground stop:** when every plane at the hub is delayed, there's no spare plane to swap in, so optimization can't help. **That's an honest limit**, and the right tools there are things like prioritizing which flights go first
+
+### The "gap" (and a lesson about solvers)
+The solver reports two numbers: the best plan it **found**, and the best score it can **prove** is possible. The gap is how far apart they are.
+
+For the 3-hour case, the plan found in **5 seconds** (score 469) was later **proven optimal** after 32 seconds. The gap shrank 68% → 48% → 0%, but **the plan never changed**. So a big gap doesn't always mean a bad plan. Sometimes the solver just hasn't finished proving it.
+
+### Design decisions
+- **Swap pool of 12 aircraft:** the disrupted plane plus the 11 planes passing through the hub with the most spare time. Including every Delta plane would make the problem too big to solve in seconds. Real airline recovery tools also limit the pool
+- **Head start (warm start):** the solver is first given the original schedule as a starting plan, so it improves from "the plan as scheduled" instead of from scratch
+- **No time-zone math needed:** every connection happens at one airport (land at X, leave from X), and both times are on X's local clock thanks to the piece 2 fix
+
+### Known limitations (bring these up yourself)
+- **No aircraft types:** BTS doesn't say which plane is an A321 vs. a 717. In real life you can only swap similar aircraft. Fix: join the FAA aircraft registry by tail number
+- **No crews:** real recovery also has to respect pilot and flight attendant duty limits. The model is built so crew rules could be added as more constraints
+- **No passengers:** delay is counted in flight-minutes, not passenger-minutes, because BTS doesn't publish passenger counts per flight
+
+### Commands
+```
+skyrecover recover                                   # plane stuck 3h at ATL, Mar 15 2pm
+skyrecover recover --hours 5 --show-plan             # 5 hours, and print every changed flight
+skyrecover recover --ground-delay 60                 # every ATL departure +60 min
+skyrecover recover --date 2024-02-10 --hub DTW --start 09:00
+```
+
+### Questions I should be ready for
+**Q: What does your optimizer do?**
+When a plane breaks down at a hub, it decides which planes fly which flights, when they leave, and what to cancel, to minimize delay. On a real Atlanta afternoon, it cut delay 43% for a 3-hour breakdown, with a plan proven optimal.
+
+**Q: Why not just write rules like "use the next free plane"?**
+Rules are greedy: they fix the problem in front of them and often cause a bigger one later. The optimizer looks at the whole afternoon at once. And it can prove when its plan is the best possible.
+
+**Q: How do you handle the tradeoff between delays and cancellations?**
+Through the score weights. A cancellation counts as 300 minutes of delay, a swap as 20. Changing those changes the plans, which is exactly the conversation you'd have with an airline's ops team.
+
+**Q: When does it NOT help?**
+A hub-wide ground stop. Every plane is delayed, so there's nothing to swap in. I found that in my own testing.

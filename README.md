@@ -6,7 +6,7 @@
 
 **Predicts airline delays before they happen, and shows how one late plane ripples through the rest of the network.** Built on 227,855 real Delta flights from US government data.
 
-> Status: forecasting and ripple modeling are working and validated. The recovery optimizer and ops dashboard are in progress (see [Roadmap](#roadmap)).
+> Status: forecasting, ripple modeling and the recovery optimizer are working on real data. The ops dashboard and AI copilot are in progress (see [Roadmap](#roadmap)).
 
 ---
 
@@ -43,6 +43,18 @@ Trained on January and February, then tested on **82,427 March flights the model
 
 The day-of model catches **2.7x more late flights** than the ripple formula alone while staying right 79% of the time, and cuts average error by **26%** versus guessing on time. The strongest signal is how late the inbound aircraft landed, which confirms that ripples drive a large share of delays.
 
+### 3. The optimizer re-plans the day when a plane breaks down
+
+A real afternoon: Atlanta, March 15, 2024, 2pm. One aircraft is stuck on the ground. The optimizer re-plans 39 flights across 12 aircraft.
+
+| Scenario | Do nothing | Delay or cancel only | **SkyRecover (with swaps)** |
+|---|---|---|---|
+| Plane stuck 3 hours | 540 min delay | 540 min | **309 min (-43%)**, proven optimal |
+| Plane stuck 5 hours | 1,020 min | 56 min, **2 flights cancelled** | **364 min, 0 cancelled** |
+| Every ATL departure +60 min | 1,094 min | 1,094 min | 1,094 min |
+
+The last row is a real finding: in a hub-wide ground stop, every aircraft is delayed, so there's no spare plane to swap in and re-planning can't help.
+
 ## How it works
 
 ```mermaid
@@ -52,7 +64,7 @@ flowchart LR
     C --> D[Features known<br/>60 min before departure]
     D --> E[LightGBM forecaster<br/>planning + day-of]
     C --> F[What-if: one delay<br/>spreads to which flights?]
-    E --> G[Recovery optimizer<br/>in progress]
+    C --> G[Recovery optimizer<br/>OR-Tools CP-SAT:<br/>swaps, delays, cancels]
 ```
 
 **Ripple Engine.** Each aircraft is followed through its day using its tail number. For every flight:
@@ -63,6 +75,8 @@ pushed delay = max(0, how late the inbound plane landed - slack)
 ```
 
 The leftover delay keeps passing to the next flight until a long enough ground time absorbs it.
+
+**Recovery optimizer.** A constraint programming model (Google OR-Tools CP-SAT). Each aircraft's day is a route through flights. Rules: a plane only departs from where it is, needs a 35-minute turn, and delays cap at 180 minutes. The goal minimizes delay minutes plus penalties for cancellations (300), reassigned flights (20, since every swap costs crews, gates and bags), and planes ending the day in the wrong city (120). The solver reports an optimality gap, so you can see whether a plan is proven best.
 
 **Forecaster.** Gradient-boosted trees (LightGBM) using schedule features (turn slack, which leg of the day, hour, airports, schedule congestion) plus live features (inbound aircraft delay so far, average delay at the airport over the last three hours).
 
@@ -88,7 +102,8 @@ skyrecover prepare                               # clean into data/processed/fli
 skyrecover ripple                                # validation + top delay spreaders
 skyrecover ripple --flight-id 204225 --delay 90  # what if this flight lands 90 min late?
 skyrecover train                                 # train + evaluate the forecaster
-pytest                                           # 18 tests, no data download needed
+skyrecover recover --hours 5 --show-plan         # plane stuck 5h at ATL: compare strategies
+pytest                                           # 24 tests, no data download needed
 ```
 
 ## Project structure
@@ -100,6 +115,7 @@ src/skyrecover/
   ripple.py          aircraft rotations, slack, delay propagation, BTS validation
   features.py        leakage-safe features (schedule + live)
   forecast.py        baselines, LightGBM models, time-split evaluation
+  optimize.py        recovery optimizer (OR-Tools), scenarios, strategy comparison
   cli.py             the `skyrecover` command
 tests/               unit tests, including leakage tests
 docs/LEARNING_LOG.md design decisions and lessons, piece by piece
@@ -110,7 +126,8 @@ docs/LEARNING_LOG.md design decisions and lessons, piece by piece
 - [x] Data pipeline from BTS with time-zone correction
 - [x] Ripple engine, validated against airline-reported causes
 - [x] Delay forecaster with leakage-safe features
-- [ ] **Recovery optimizer:** when things break, swap aircraft and re-time flights to minimize total passenger delay (OR-Tools)
+- [x] Recovery optimizer: aircraft swaps, delays and cancellations with OR-Tools
+- [ ] Aircraft types (FAA registry) and crew duty limits in the optimizer
 - [ ] **Ops dashboard:** web app with a delay map and click-to-see ripple chains
 - [ ] **Ops copilot:** ask "what if we cancel DL1234?" in plain English, with an AI agent calling the simulator and optimizer as tools
 - [ ] Weather features (NOAA) to strengthen the planning model
