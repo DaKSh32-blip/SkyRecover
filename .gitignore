@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Data and outputs are generated, not committed (real data is hundreds of MB)
+data/raw/
+data/processed/
+models/
+reports/*.json
+
+# Keep the folders themselves
+!data/.gitkeep
+!models/.gitkeep
+
+# Secrets
+.env
