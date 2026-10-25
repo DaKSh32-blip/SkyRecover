@@ -19,7 +19,7 @@ import pandas as pd
 COLUMNS = {
     "FlightDate": "date",
     "Reporting_Airline": "airline",
-    "Tail_Number": "tail",
+    "Tail_Number": "tail_number",
     "Flight_Number_Reporting_Airline": "flight_no",
     "Origin": "origin",
     "Dest": "dest",
@@ -40,7 +40,7 @@ COLUMNS = {
 
 # The final table every other module relies on
 CLEAN_COLUMNS = [
-    "flight_id", "date", "airline", "tail", "flight_no", "origin", "dest",
+    "flight_id", "date", "airline", "tail_number", "flight_no", "origin", "dest",
     "sched_dep", "sched_arr", "dep_delay", "arr_delay", "cancelled", "distance",
     "cause_carrier", "cause_weather", "cause_nas", "cause_security", "cause_late_aircraft",
 ]
@@ -70,7 +70,7 @@ def clean(raw: pd.DataFrame, airline: str | None = "DL") -> pd.DataFrame:
     # Diverted flights landed somewhere else, so their arrival delay is meaningless.
     df = df[df["diverted"].fillna(0) == 0]
     # Without a tail number we can't follow the aircraft, so we can't model ripples.
-    df = df[df["tail"].notna() & (df["tail"].astype(str).str.strip() != "")]
+    df = df[df["tail_number"].notna() & (df["tail_number"].astype(str).str.strip() != "")]
 
     date = pd.to_datetime(df["date"])
     dep_min = hhmm_to_minutes(df["crs_dep_hhmm"])
@@ -79,23 +79,33 @@ def clean(raw: pd.DataFrame, airline: str | None = "DL") -> pd.DataFrame:
         sched_dep=date + pd.to_timedelta(dep_min, unit="m"),
     )
 
-    # Scheduled arrival = scheduled departure + scheduled flight time.
-    # This automatically handles flights that land after midnight.
-    # Note: BTS times are LOCAL time at each airport, so for flights crossing
-    # time zones this is an approximation (fine for ordering an aircraft's legs).
+    # Scheduled arrival, in LOCAL time at the destination airport.
+    #
+    # Gotcha: BTS times are local to each airport. A flight leaving Atlanta at
+    # 10:00 Eastern and landing in Los Angeles after 4h50m arrives at 11:50
+    # Pacific, NOT 14:50. If we just did "departure + flight time" we'd be mixing
+    # time zones, and the plane's ground time in LA would come out 3 hours wrong.
+    #
+    # So we use the reported local arrival clock time (CRSArrTime) and only use
+    # "departure + flight time" to figure out WHICH DAY it lands (red-eyes land
+    # the next morning). Time-zone gaps are always < 12 hours, so rounding to
+    # the nearest whole day picks the right date.
     elapsed = pd.to_numeric(df["crs_elapsed"], errors="coerce")
-    fallback = (hhmm_to_minutes(df["crs_arr_hhmm"]) - dep_min) % (24 * 60)
-    elapsed = elapsed.fillna(fallback)
-    df["sched_arr"] = df["sched_dep"] + pd.to_timedelta(elapsed, unit="m")
+    arr_min = hhmm_to_minutes(df["crs_arr_hhmm"])
+    elapsed = elapsed.fillna((arr_min - dep_min) % (24 * 60))
+    naive_arr = df["sched_dep"] + pd.to_timedelta(elapsed, unit="m")   # departure-zone clock
+    arr_same_day = date + pd.to_timedelta(arr_min, unit="m")           # arrival-zone clock, guessing same day
+    day_shift = ((naive_arr - arr_same_day) / pd.Timedelta(days=1)).round()
+    df["sched_arr"] = arr_same_day + pd.to_timedelta(day_shift, unit="D")
 
     df["cancelled"] = df["cancelled"].fillna(0).astype(bool)
     for c in ["cause_carrier", "cause_weather", "cause_nas", "cause_security", "cause_late_aircraft"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
 
-    df["tail"] = df["tail"].astype(str).str.strip()
+    df["tail_number"] = df["tail_number"].astype(str).str.strip()
     df["flight_no"] = pd.to_numeric(df["flight_no"], errors="coerce").astype("Int64")
 
-    df = df.sort_values(["sched_dep", "tail"]).reset_index(drop=True)
+    df = df.sort_values(["sched_dep", "tail_number"]).reset_index(drop=True)
     df["flight_id"] = np.arange(len(df))
     return df[CLEAN_COLUMNS]
 
@@ -107,6 +117,6 @@ def prepare(raw_files: list[Path], airline: str | None = "DL") -> pd.DataFrame:
         print(f"  reading {path.name}")
         frames.append(clean(read_raw_zip(path), airline=airline))
     df = pd.concat(frames, ignore_index=True)
-    df = df.sort_values(["sched_dep", "tail"]).reset_index(drop=True)
+    df = df.sort_values(["sched_dep", "tail_number"]).reset_index(drop=True)
     df["flight_id"] = np.arange(len(df))
     return df
